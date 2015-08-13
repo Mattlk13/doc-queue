@@ -25,9 +25,9 @@ module DocQueue
     attr_accessor :concurrency
 
     def initialize(queue, concurrency=nil, socket=nil, relay=nil)
-      raise ArgumentError, 'array required' unless Array === queue
+      fail ArgumentError, 'array required' unless queue.is_a?(Array)
 
-      if forced = ENV['TEST_QUEUE_FORCE']
+      if forced = ENV['DOC_QUEUE_FORCE']
         forced = forced.split(/\s*,\s*/)
         whitelist = Set.new(forced)
         queue = queue.select{ |s| whitelist.include?(s.to_s) }
@@ -36,15 +36,15 @@ module DocQueue
 
       @procline = $0
       @queue = queue
-      @suites = queue.inject(Hash.new){ |hash, suite| hash.update suite.to_s => suite }
+      @suites = queue.inject({}) { |a, e| a.update e.to_s => e }
 
       @workers = {}
       @completed = []
 
       @concurrency =
         concurrency ||
-        (ENV['TEST_QUEUE_WORKERS'] && ENV['TEST_QUEUE_WORKERS'].to_i) ||
-        if File.exists?('/proc/cpuinfo')
+        (ENV['DOC_QUEUE_WORKERS'] && ENV['DOC_QUEUE_WORKERS'].to_i) ||
+        if File.exist?('/proc/cpuinfo')
           File.read('/proc/cpuinfo').split("\n").grep(/processor/).size
         elsif RUBY_PLATFORM =~ /darwin/
           `/usr/sbin/sysctl -n hw.activecpu`.to_i
@@ -53,24 +53,24 @@ module DocQueue
         end
 
       @slave_connection_timeout =
-        (ENV['TEST_QUEUE_RELAY_TIMEOUT'] && ENV['TEST_QUEUE_RELAY_TIMEOUT'].to_i) ||
+        (ENV['DOC_QUEUE_RELAY_TIMEOUT'] && ENV['DOC_QUEUE_RELAY_TIMEOUT'].to_i) ||
         30
 
-      @run_token = ENV['TEST_QUEUE_RELAY_TOKEN'] || SecureRandom.hex(8)
+      @run_token = ENV['DOC_QUEUE_RELAY_TOKEN'] || SecureRandom.hex(8)
 
       @socket =
         socket ||
-        ENV['TEST_QUEUE_SOCKET'] ||
-        "/tmp/test_queue_#{$$}_#{object_id}.sock"
+        ENV['DOC_QUEUE_SOCKET'] ||
+        "/tmp/doc_queue_#{$$}_#{object_id}.sock"
 
       @relay =
         relay ||
-        ENV['TEST_QUEUE_RELAY']
+        ENV['DOC_QUEUE_RELAY']
 
-      @slave_message = ENV["TEST_QUEUE_SLAVE_MESSAGE"] if ENV.has_key?("TEST_QUEUE_SLAVE_MESSAGE")
+      @slave_message = ENV['DOC_QUEUE_SLAVE_MESSAGE'] if ENV.key?('DOC_QUEUE_SLAVE_MESSAGE')
 
       if @relay == @socket
-        STDERR.puts "*** Detected TEST_QUEUE_RELAY == TEST_QUEUE_SOCKET. Disabling relay mode."
+        STDERR.puts '*** Detected DOC_QUEUE_RELAY == DOC_QUEUE_SOCKET. Disabling relay mode.'
         @relay = nil
       elsif @relay
         @queue = []
@@ -79,7 +79,7 @@ module DocQueue
 
     def stats
       @stats ||=
-        if File.exists?(file = stats_file)
+        if File.exist?(file = stats_file)
           Marshal.load(IO.binread(file)) || {}
         else
           {}
@@ -90,16 +90,18 @@ module DocQueue
       $stdout.sync = $stderr.sync = true
       @start_time = Time.now
 
-      @concurrency > 0 ?
-        execute_parallel :
+      if @concurrency > 0
+        execute_parallel
+      else
         execute_sequential
+      end
     ensure
-      summarize_internal unless $!
+      summarize_internal unless $ERROR_INFO
     end
 
     def summarize_internal
       puts
-      puts "==> Summary (#{@completed.size} workers in %.4fs)" % (Time.now-@start_time)
+      puts "==> Summary (#{@completed.size} workers in %.4fs)" % (Time.now - @start_time)
       puts
 
       @failures = ''
@@ -107,7 +109,7 @@ module DocQueue
         summarize_worker(worker)
         @failures << worker.failure_output if worker.failure_output
 
-        puts "    [%2d] %60s      %4d suites in %.4fs      (pid %d exit %d%s)" % [
+        puts '    [%2d] %60s      %4d suites in %.4fs      (pid %d exit %d%s)' % [
           worker.num,
           worker.summary,
           worker.stats.size,
@@ -120,7 +122,7 @@ module DocQueue
 
       unless @failures.empty?
         puts
-        puts "==> Failures"
+        puts '==> Failures'
         puts
         puts @failures
       end
@@ -144,8 +146,8 @@ module DocQueue
     end
 
     def stats_file
-      ENV['TEST_QUEUE_STATS'] ||
-      '.test_queue_stats'
+      ENV['DOC_QUEUE_STATS'] ||
+        '.doc_queue_stats'
     end
 
     def execute_sequential
@@ -172,19 +174,19 @@ module DocQueue
     end
 
     def start_master
-      if !relay?
+      unless relay?
         if @socket =~ /^(?:(.+):)?(\d+)$/
           address = $1 || '0.0.0.0'
           port = $2.to_i
           @socket = "#$1:#$2"
           @server = TCPServer.new(address, port)
         else
-          FileUtils.rm(@socket) if File.exists?(@socket)
+          FileUtils.rm(@socket) if File.exist?(@socket)
           @server = UNIXServer.new(@socket)
         end
       end
 
-      desc = "test-queue master (#{relay?? "relaying to #{@relay}" : @socket})"
+      desc = "doc-queue master (#{relay?? "relaying to #{@relay}" : @socket})"
       puts "Starting #{desc}"
       $0 = "#{desc} - #{@procline}"
     end
@@ -193,8 +195,8 @@ module DocQueue
       return unless relay?
 
       sock = connect_to_relay
-      message = @slave_message ? " #{@slave_message}" : ""
-      message.gsub!(/(\r|\n)/, "") # Our "protocol" is newline-separated
+      message = @slave_message ? " #{@slave_message}" : ''
+      message.gsub!(/(\r|\n)/, '') # Our "protocol" is newline-separated
       sock.puts("SLAVE #{@concurrency} #{Socket.gethostname} #{@run_token}#{message}")
       response = sock.gets.strip
       unless response == "OK"
@@ -237,13 +239,13 @@ module DocQueue
     def after_fork_internal(num, iterator)
       srand
 
-      output = File.open("/tmp/test_queue_worker_#{$$}_output", 'w')
+      output = File.open("/tmp/doc_queue_worker_#{$PID}_output", 'w')
 
       $stdout.reopen(output)
       $stderr.reopen($stdout)
       $stdout.sync = $stderr.sync = true
 
-      $0 = "test-queue worker [#{num}]"
+      $0 = "doc-queue worker [#{num}]"
       puts
       puts "==> Starting #$0 (#{Process.pid} on #{Socket.gethostname}) - iterating over #{iterator.sock}"
       puts
@@ -291,12 +293,12 @@ module DocQueue
         worker.status = $?
         worker.end_time = Time.now
 
-        if File.exists?(file = "/tmp/test_queue_worker_#{pid}_output")
+        if File.exist?(file = "/tmp/doc_queue_worker_#{pid}_output")
           worker.output = IO.binread(file)
           FileUtils.rm(file)
         end
 
-        if File.exists?(file = "/tmp/test_queue_worker_#{pid}_stats")
+        if File.exist?(file = "/tmp/doc_queue_worker_#{pid}_stats")
           worker.stats = Marshal.load(IO.binread(file))
           FileUtils.rm(file)
         end
@@ -308,7 +310,7 @@ module DocQueue
 
     def worker_completed(worker)
       @completed << worker
-      puts worker.output if ENV['TEST_QUEUE_VERBOSE'] || worker.status.exitstatus != 0
+      puts worker.output if ENV['DOC_QUEUE_VERBOSE'] || worker.status.exitstatus != 0
     end
 
     def distribute_queue
@@ -342,7 +344,7 @@ module DocQueue
               sock.write("WRONG RUN\n")
             end
             message = "*** #{num} workers connected from #{slave} after #{Time.now-@start_time}s"
-            message << " " + slave_message if slave_message
+            message << ' ' + slave_message if slave_message
             STDERR.puts message
           when /^WORKER (\d+)/
             data = sock.read($1.to_i)
@@ -374,7 +376,7 @@ module DocQueue
           sock = TCPSocket.new(*@relay.split(':'))
         rescue Errno::ECONNREFUSED => e
           raise e if Time.now - start > @slave_connection_timeout
-          puts "Master not yet available, sleeping..."
+          puts 'Master not yet available, sleeping...'
           sleep 0.5
         end
       end

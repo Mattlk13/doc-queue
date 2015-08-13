@@ -2,7 +2,7 @@ module DocQueue
   class Iterator
     attr_reader :stats, :sock
 
-    def initialize(sock, suites, filter=nil)
+    def initialize(sock, suites, filter = nil)
       @done = false
       @stats = {}
       @procline = $0
@@ -16,15 +16,15 @@ module DocQueue
     end
 
     def each
-      fail "already used this iterator. previous caller: #@done" if @done
+      fail "already used this iterator. previous caller: #{@done}" if @done
 
       while true
         client = connect_to_master('POP')
         break if client.nil?
         r, w, e = IO.select([client], nil, [client], nil)
-        break if !e.empty?
+        break unless e.empty?
 
-        if data = client.read(65536)
+        if data = client.read(65_536)
           client.close
           item = Marshal.load(data)
           break if item.nil? || item.empty?
@@ -33,7 +33,7 @@ module DocQueue
           $0 = "#{@procline} - #{suite.respond_to?(:description) ? suite.description : suite}"
           start = Time.now
           if @filter
-            @filter.call(suite){ yield suite }
+            @filter.call(suite) { yield suite }
           else
             yield suite
           end
@@ -45,7 +45,7 @@ module DocQueue
     rescue Errno::ENOENT, Errno::ECONNRESET, Errno::ECONNREFUSED
     ensure
       @done = caller.first
-      File.open("/tmp/test_queue_worker_#{$$}_stats", "wb") do |f|
+      File.open("/tmp/doc_queue_worker_#{$PID}_stats", 'wb') do |f|
         f.write Marshal.dump(@stats)
       end
     end
