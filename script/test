@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -e
+
+echo "===> Bundling..."
+script/bootstrap
+
+echo "===> Running specs..."
+bundle exec rake test

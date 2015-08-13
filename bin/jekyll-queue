@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+require 'doc_queue'
+require 'doc_queue/runner/jekyll'
+ARGV.each{ |f| require(f) }
+DocQueue::Runner::Jekyll.new.execute

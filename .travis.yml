@@ -1,0 +1,10 @@
+language: ruby
+rvm:
+  - 2.0
+  - 2.1
+  - 2.2
+
+bundler_args: --without development
+sudo: false
+git:
+  depth: 10
